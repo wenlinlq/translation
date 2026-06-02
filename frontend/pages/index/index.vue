@@ -7,9 +7,9 @@
 
 		<view class="card">
 			<text class="label">选择本地音频</text>
-			<text class="hint req">· 百度短语音：单次录音 ≤60 秒（官方限制）</text>
-			<text class="hint req">· 请上传 ≤60 秒人声；更长会切分仍可能失败，请先裁剪</text>
-			<text class="hint req">· 格式 WAV/MP3/M4A，16kHz 单声道，≤50MB</text>
+			<text class="hint req">· 百度「音频文件转写」：先上传 BOS 再识别，支持数分钟音频</text>
+			<text class="hint req">· 格式 WAV/MP3/M4A，≤500MB；需在 .env 配置 BOS</text>
+			<text class="hint req">· 未配置 BOS 时回退短语音（≤60秒）</text>
 			<button type="primary" @click="chooseAudio">选择文件</button>
 			<text class="hint">{{ audioName || '未选择文件' }}</text>
 		</view>
@@ -214,7 +214,8 @@
 				if (data.timings) {
 					const t = data.timings
 					const parts = []
-					if (t.convert != null) parts.push(`转换${t.convert}ms`)
+					if (t.bos != null) parts.push(`BOS${t.bos}ms`)
+					if (t.asrPoll != null) parts.push(`轮询${t.asrPoll}ms`)
 					if (t.asr != null) parts.push(`ASR${t.asr}ms`)
 					if (t.mt != null) parts.push(`MT${t.mt}ms`)
 					if (t.tts != null) parts.push(`TTS${t.tts}ms`)
