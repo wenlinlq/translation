@@ -41,9 +41,14 @@ function applyResult(data) {
   btnRetranslate.disabled = !data.originalText;
 
   if (data.asrMeta) {
-    const dur = data.asrMeta.audioDurationSec ?? data.asrMeta.durationSec;
-    const maxSec = data.asrMeta.baiduMaxSecPerRequest ?? 60;
-    asrMeta.textContent = `百度短语音（单次≤${maxSec}s）dev_pid=${data.asrMeta.devPid}，本文件约 ${dur}s，分 ${data.asrMeta.segments} 段识别`;
+    const mode = data.asrMode || data.asrMeta?.mode;
+    if (mode === 'aasr') {
+      const dur = data.asrMeta.audioDurationSec;
+      asrMeta.textContent = `音频文件转写 pid=${data.asrMeta.pid}，时长约 ${dur ?? '?'}s，task=${data.asrMeta.taskId || ''}`;
+    } else {
+      const maxSec = data.asrMeta.baiduMaxSecPerRequest ?? 60;
+      asrMeta.textContent = `短语音（≤${maxSec}s）dev_pid=${data.asrMeta.devPid}，分段 ${data.asrMeta.segments ?? 1}`;
+    }
   }
 
   if (data.files?.ttsAudio) {
@@ -61,6 +66,9 @@ function applyResult(data) {
   if (data.timings) {
     const t = data.timings;
     const parts = [];
+    if (t.bos != null) parts.push(`BOS ${t.bos}ms`);
+    if (t.asrCreate != null) parts.push(`创建任务 ${t.asrCreate}ms`);
+    if (t.asrPoll != null) parts.push(`轮询 ${t.asrPoll}ms`);
     if (t.convert != null) parts.push(`转换 ${t.convert}ms`);
     if (t.asr != null) parts.push(`ASR ${t.asr}ms`);
     if (t.mt != null) parts.push(`MT ${t.mt}ms`);

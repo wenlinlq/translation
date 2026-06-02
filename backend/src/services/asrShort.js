@@ -48,7 +48,6 @@ function mergeSegmentTexts(parts, sourceLang) {
   return joined.trim();
 }
 
-/** RAW 方式上传，避免 JSON+base64 导致 content len too long */
 async function recognizeOneChunkRaw(wavPath, token, devPid) {
   const audioBuffer = fs.readFileSync(wavPath);
   const maxBytes = 9 * 1024 * 1024;
@@ -98,7 +97,6 @@ async function recognizeChunkWithFallback(wavPath, token, sourceLang) {
     } catch (e) {
       lastErr = e;
       if (e.retryPid) continue;
-      if (/content len too long/i.test(e.message)) throw e;
       throw e;
     }
   }
@@ -106,28 +104,19 @@ async function recognizeChunkWithFallback(wavPath, token, sourceLang) {
   throw (
     lastErr ||
     new Error(
-      `语音识别失败。百度短语音单次不超过 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒，请裁剪音频后重试`
+      `语音识别失败。百度短语音单次不超过 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒`
     )
   );
 }
 
-/**
- * 百度短语音识别（自动分段，每段符合 ≤60s 限制）
- */
-export async function recognizeSpeech(wavPath, apiKey, secretKey, sourceLang = 'zh') {
+/** 百度短语音识别（未配置 BOS 时回退） */
+export async function recognizeSpeechShort(wavPath, apiKey, secretKey, sourceLang = 'zh') {
   const token = await getAccessToken(apiKey, secretKey);
   const duration = getWavDurationSeconds(wavPath);
 
   if (duration > AUDIO_LIMITS.baiduShortAsrMaxSeconds * 5) {
     throw new Error(
-      `音频约 ${Math.ceil(duration)} 秒，过长。百度短语音识别适合 ≤${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒/次，` +
-        `建议裁剪为 1 分钟以内，或使用百度「音频文件转写」处理长音频`
-    );
-  }
-
-  if (duration > AUDIO_LIMITS.baiduShortAsrMaxSeconds) {
-    console.warn(
-      `[ASR] 音频 ${duration.toFixed(1)}s 超过百度单次 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds}s，将切分为 ${CHUNK_SECONDS}s/段`
+      `音频约 ${Math.ceil(duration)} 秒。请配置 BOS 使用「音频文件转写」，或裁剪至 ≤${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒`
     );
   }
 
@@ -138,12 +127,6 @@ export async function recognizeSpeech(wavPath, apiKey, secretKey, sourceLang = '
 
   try {
     for (const chunk of chunks) {
-      const chunkDur = getWavDurationSeconds(chunk.path);
-      if (chunkDur > AUDIO_LIMITS.baiduShortAsrMaxSeconds + 1) {
-        throw new Error(
-          `内部分段仍超过 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒，请缩短音频`
-        );
-      }
       const result = await recognizeChunkWithFallback(chunk.path, token, sourceLang);
       if (result.text) texts.push(result.text);
       usedPid = result.devPid;
@@ -155,7 +138,7 @@ export async function recognizeSpeech(wavPath, apiKey, secretKey, sourceLang = '
 
   const result = mergeSegmentTexts(texts, sourceLang);
   if (!result) {
-    throw new Error('语音识别结果为空，请检查音频是否清晰且为有效语音');
+    throw new Error('语音识别结果为空');
   }
 
   return {
@@ -163,10 +146,8 @@ export async function recognizeSpeech(wavPath, apiKey, secretKey, sourceLang = '
     meta: {
       devPid: usedPid,
       endpoint,
-      audioDurationSec: Math.round(duration * 10) / 10,
       baiduMaxSecPerRequest: AUDIO_LIMITS.baiduShortAsrMaxSeconds,
       segments: chunks.length,
-      chunkSec: CHUNK_SECONDS,
     },
   };
 }

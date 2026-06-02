@@ -1,23 +1,22 @@
 /**
- * 与百度智能云文档一致的音频限制说明
- * @see https://cloud.baidu.com/doc/SPEECH/s/Jlbxdezuf 短语音识别标准版
- * @see https://cloud.baidu.com/doc/SPEECH/s/qlcirqhz0 产品概述
+ * 音频限制说明（与百度智能云文档一致）
+ * 短语音: https://cloud.baidu.com/doc/SPEECH/s/Jlbxdezuf
+ * 音频文件转写: https://cloud.baidu.com/doc/SPEECH/s/Klbxern8v
  */
 export const AUDIO_LIMITS = {
-  /** 百度短语音识别：单次请求完整录音 ≤60 秒 */
+  /** 短语音识别单次上限 */
   baiduShortAsrMaxSeconds: 60,
-  /** 本服务切分每段时长（须 <60s，留 1 秒余量） */
+  /** 音频文件转写：单文件最大约 500MB */
+  aasrMaxFileSizeMb: 500,
+  maxFileSizeMb: 500,
   chunkSeconds: 59,
-  maxFileSizeMb: 50,
-  /** 短语音 API 支持格式（百度文档：pcm/wav/amr/m4a） */
-  formats: 'WAV、MP3、M4A（将转为 16kHz 单声道）',
+  formats: 'WAV、MP3、M4A',
   sampleRate: 16000,
-  channels: 1,
 };
 
 export const UPLOAD_HINT_LINES = [
-  `百度「短语音识别」：单次上传录音时长不超过 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒（官方硬性限制）`,
-  `请上传 ≤ ${AUDIO_LIMITS.baiduShortAsrMaxSeconds} 秒的清晰人声；超过后系统会按约 ${AUDIO_LIMITS.chunkSeconds} 秒/段切分，过长仍可能失败（如 3 分钟以上）`,
-  `格式：${AUDIO_LIMITS.formats}；采样率 ${AUDIO_LIMITS.sampleRate}Hz、单声道；单文件 ≤ ${AUDIO_LIMITS.maxFileSizeMb}MB`,
-  '更长音频需使用百度「音频文件转写」（异步、需公网音频 URL），当前版本未接入',
+  '识别方式：百度「音频文件转写」（需配置 BOS 对象存储，先上传云端再识别）',
+  `支持格式：${AUDIO_LIMITS.formats}，16kHz 单声道推荐；单文件 ≤ ${AUDIO_LIMITS.aasrMaxFileSizeMb}MB`,
+  '时长：支持数分钟至更长音频（异步转写，请耐心等待）；未配置 BOS 时回退短语音（单次 ≤60 秒）',
+  '请在 .env 配置 BOS_ACCESS_KEY_ID、BOS_SECRET_ACCESS_KEY、BOS_BUCKET',
 ];

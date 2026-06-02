@@ -3,11 +3,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import multer from 'multer';
-import { recognizeSpeech } from '../services/asr.js';
+import { recognizeSpeech } from '../services/asrRouter.js';
+import { isBosConfigured } from '../services/bos.js';
 import { translateText } from '../services/mt.js';
 import { synthesizeSpeech, TTS_VOICE_OPTIONS } from '../services/tts.js';
-import { toWav16kMono } from '../utils/audioConvert.js';
-import { getWavDurationSeconds } from '../utils/wavSplit.js';
 import { createTimer } from '../utils/timing.js';
 import * as logger from '../utils/logger.js';
 import { AUDIO_LIMITS, UPLOAD_HINT_LINES } from '../config/audioLimits.js';
@@ -80,8 +79,8 @@ async function runMtAndTts(
     `目标语言: ${targetLang}`,
     `生成时间: ${new Date().toLocaleString('zh-CN')}`,
     '',
-    '========== 各阶段耗时 ==========',
-    ...Object.entries(timings).map(([k, v]) => `${k}: ${v} ms`),
+    '========== 各阶段耗时 (ms) ==========',
+    ...Object.entries(timings).map(([k, v]) => `${k}: ${v}`),
   ].join('\n');
   fs.writeFileSync(resultTxtPath, resultContent, 'utf8');
   logger.log('INFO', '已保存文本结果', resultTxtPath);
@@ -115,7 +114,12 @@ async function runMtAndTts(
 }
 
 pipelineRouter.get('/limits', (_req, res) => {
-  res.json({ limits: AUDIO_LIMITS, hints: UPLOAD_HINT_LINES });
+  res.json({
+    limits: AUDIO_LIMITS,
+    hints: UPLOAD_HINT_LINES,
+    bosConfigured: isBosConfigured(),
+    asrMode: isBosConfigured() ? 'aasr' : 'short',
+  });
 });
 
 pipelineRouter.get('/voices', (_req, res) => {
@@ -126,7 +130,6 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
   const logPath = logger.startSessionLog();
   const pipelineTimer = createTimer();
   const timings = {};
-  let tempWav = null;
 
   try {
     if (!req.file) {
@@ -142,6 +145,10 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
       throw new Error('请在 backend/.env 中配置百度语音与翻译密钥');
     }
 
+    if (!isBosConfigured()) {
+      logger.log('INFO', '未配置 BOS，将使用短语音识别（≤60秒）');
+    }
+
     const sourceLang = req.body.sourceLang || process.env.SOURCE_LANG || 'zh';
     const targetLang = req.body.targetLang || process.env.TARGET_LANG || 'en';
     const ttsPer = req.body.ttsPer;
@@ -151,29 +158,26 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
       originalname: req.file.originalname,
       size: req.file.size,
       sizeMb: (req.file.size / 1024 / 1024).toFixed(2),
+      asrMode: isBosConfigured() ? '音频文件转写+BOS' : '短语音',
     });
 
     let t = createTimer();
-    logger.log('INFO', '步骤 0：音频格式转换');
-    tempWav = await toWav16kMono(req.file.path);
-    const audioDurationSec = getWavDurationSeconds(tempWav);
-    timings.convert = t.elapsedMs();
-    logger.logTiming('音频转换', timings.convert, {
-      durationSec: Math.round(audioDurationSec * 10) / 10,
-    });
-
-    if (audioDurationSec > AUDIO_LIMITS.baiduShortAsrMaxSeconds) {
-      logger.log(
-        'INFO',
-        `音频 ${audioDurationSec}s 超过百度短语音单次 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds}s 限制，将按 ${AUDIO_LIMITS.chunkSeconds}s/段切分`
-      );
-    }
-
-    t = createTimer();
     logger.log('INFO', '步骤 1/3：语音识别 (ASR)');
-    const asr = await recognizeSpeech(tempWav, speechKey, speechSecret, sourceLang);
+    const asr = await recognizeSpeech(
+      req.file.path,
+      req.file.originalname,
+      sourceLang,
+      speechKey,
+      speechSecret
+    );
     timings.asr = t.elapsedMs();
-    logger.logTiming('ASR 语音识别', timings.asr, asr.meta);
+    if (asr.meta?.timings) {
+      timings.bos = asr.meta.timings.bos;
+      timings.asrCreate = asr.meta.timings.create;
+      timings.asrPoll = asr.meta.timings.poll;
+    }
+    logger.logTiming('ASR 语音识别（总计）', timings.asr, asr.meta);
+    logger.log('INFO', '识别完成', asr.text.slice(0, 200));
 
     const payload = await runMtAndTts(
       asr.text,
@@ -194,7 +198,8 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
     res.json({
       success: true,
       ...payload,
-      asrMeta: { ...asr.meta, audioDurationSec },
+      asrMeta: asr.meta,
+      asrMode: asr.meta?.mode || (isBosConfigured() ? 'aasr' : 'short'),
       timings,
       logFile: path.basename(logPath),
     });
@@ -211,17 +216,9 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
         /* ignore */
       }
     }
-    if (tempWav && tempWav !== req.file?.path && fs.existsSync(tempWav)) {
-      try {
-        fs.unlinkSync(tempWav);
-      } catch {
-        /* ignore */
-      }
-    }
   }
 });
 
-/** 用户修正原文后，仅重新翻译 + TTS */
 pipelineRouter.post('/reprocess', async (req, res) => {
   const logPath = logger.startSessionLog();
   const pipelineTimer = createTimer();
