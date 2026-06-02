@@ -1,10 +1,21 @@
 const audioFile = document.getElementById('audioFile');
 const fileName = document.getElementById('fileName');
 const btnProcess = document.getElementById('btnProcess');
+const btnRetranslate = document.getElementById('btnRetranslate');
 const originalText = document.getElementById('originalText');
 const translatedText = document.getElementById('translatedText');
 const outputLinks = document.getElementById('outputLinks');
 const runLog = document.getElementById('runLog');
+const asrMeta = document.getElementById('asrMeta');
+const ttsPlayer = document.getElementById('ttsPlayer');
+const ttsHint = document.getElementById('ttsHint');
+const btnPlayTts = document.getElementById('btnPlayTts');
+const btnPauseTts = document.getElementById('btnPauseTts');
+const ttsDownload = document.getElementById('ttsDownload');
+const ttsMeta = document.getElementById('ttsMeta');
+const ttsVoice = document.getElementById('ttsVoice');
+
+let lastTtsUrl = '';
 
 function appendLog(line) {
   const t = new Date().toLocaleTimeString('zh-CN');
@@ -12,9 +23,82 @@ function appendLog(line) {
   runLog.scrollTop = runLog.scrollHeight;
 }
 
+function setTtsPreview(url) {
+  if (!url) return;
+  lastTtsUrl = `${url}?t=${Date.now()}`;
+  ttsPlayer.src = lastTtsUrl;
+  ttsDownload.href = lastTtsUrl;
+  ttsDownload.hidden = false;
+  ttsDownload.download = 'translation-tts.mp3';
+  ttsHint.textContent = '可拖动进度条试听合成语音';
+  btnPlayTts.disabled = false;
+  btnPauseTts.disabled = false;
+}
+
+function applyResult(data) {
+  originalText.value = data.originalText || '';
+  translatedText.textContent = data.translatedText || '—';
+  btnRetranslate.disabled = !data.originalText;
+
+  if (data.asrMeta) {
+    asrMeta.textContent = `识别模型 dev_pid=${data.asrMeta.devPid}，时长约 ${data.asrMeta.durationSec}s，分段 ${data.asrMeta.segments} 段`;
+  }
+
+  if (data.files?.ttsAudio) {
+    setTtsPreview(data.files.ttsAudio);
+  }
+
+  if (data.ttsMeta?.per !== undefined) {
+    ttsMeta.textContent = `当前使用发音人 per=${data.ttsMeta.per}`;
+    if (ttsVoice) ttsVoice.value = String(data.ttsMeta.per);
+  }
+
+  outputLinks.innerHTML = `
+    <li><a href="${data.files.resultTxt}" download>下载：原文与译文 (.txt)</a></li>
+    <li><a href="${data.files.ttsAudio}" download>下载：合成语音 (.mp3)</a></li>
+    <li class="hint">服务端目录: backend/output/</li>
+  `;
+}
+
 audioFile.addEventListener('change', () => {
   const f = audioFile.files[0];
   fileName.textContent = f ? `${f.name} (${(f.size / 1024).toFixed(1)} KB)` : '未选择文件';
+});
+
+btnPlayTts.addEventListener('click', () => ttsPlayer.play().catch(() => {}));
+btnPauseTts.addEventListener('click', () => ttsPlayer.pause());
+
+btnRetranslate.addEventListener('click', async () => {
+  const text = originalText.value.trim();
+  if (!text) {
+    alert('请先填写或修正识别原文');
+    return;
+  }
+
+  btnRetranslate.disabled = true;
+  appendLog('使用修正原文重新翻译…');
+
+  try {
+    const res = await fetch('/api/reprocess', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        originalText: text,
+        sourceLang: document.getElementById('sourceLang').value,
+        targetLang: document.getElementById('targetLang').value,
+        ttsPer: ttsVoice?.value,
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || '处理失败');
+    applyResult(data);
+    appendLog('重新翻译与合成完成');
+  } catch (e) {
+    appendLog(`错误: ${e.message}`);
+    alert(e.message);
+  } finally {
+    btnRetranslate.disabled = false;
+  }
 });
 
 btnProcess.addEventListener('click', async () => {
@@ -31,10 +115,15 @@ btnProcess.addEventListener('click', async () => {
   }
 
   btnProcess.disabled = true;
+  btnRetranslate.disabled = true;
   runLog.textContent = '';
-  originalText.textContent = '处理中…';
+  originalText.value = '处理中…';
   translatedText.textContent = '处理中…';
   outputLinks.innerHTML = '<li class="hint">处理中…</li>';
+  ttsPlayer.removeAttribute('src');
+  ttsHint.textContent = '正在合成…';
+  btnPlayTts.disabled = true;
+  btnPauseTts.disabled = true;
 
   appendLog(`选择文件: ${file.name}`);
   appendLog('上传并调用 ASR → MT → TTS…');
@@ -43,33 +132,21 @@ btnProcess.addEventListener('click', async () => {
   form.append('audio', file);
   form.append('sourceLang', document.getElementById('sourceLang').value);
   form.append('targetLang', document.getElementById('targetLang').value);
+  form.append('ttsPer', ttsVoice?.value || '5118');
 
   try {
     const res = await fetch('/api/process', { method: 'POST', body: form });
     const data = await res.json();
+    if (!data.success) throw new Error(data.message || '处理失败');
 
-    if (!data.success) {
-      throw new Error(data.message || '处理失败');
-    }
-
-    originalText.textContent = data.originalText;
-    translatedText.textContent = data.translatedText;
-
-    outputLinks.innerHTML = `
-      <li><a href="${data.files.resultTxt}" download>下载：原文与译文 (.txt)</a></li>
-      <li><a href="${data.files.ttsAudio}" download>下载：合成语音 (.mp3)</a></li>
-      <li class="hint">服务端目录: backend/output/</li>
-    `;
-
+    applyResult(data);
     appendLog('ASR 识别完成');
     appendLog('MT 翻译完成');
-    appendLog('TTS 已保存到 output');
-    if (data.logFile) {
-      appendLog(`服务端日志: backend/logs/${data.logFile}`);
-    }
+    appendLog('TTS 已保存，可试听');
+    if (data.logFile) appendLog(`服务端日志: backend/logs/${data.logFile}`);
     appendLog('全部完成');
   } catch (e) {
-    originalText.textContent = '—';
+    originalText.value = '';
     translatedText.textContent = '—';
     outputLinks.innerHTML = '<li class="hint">处理失败</li>';
     appendLog(`错误: ${e.message}`);

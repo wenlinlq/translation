@@ -10,7 +10,7 @@
   <main class="container">
     <header>
       <h1>音频识别 · 翻译 · 语音合成</h1>
-      <p class="subtitle">Node.js 后端 · 百度 ASR / MT / TTS</p>
+      <p class="subtitle">ASR 自动分段 · 模型无权限时自动回退</p>
     </header>
 
     <section class="card">
@@ -43,17 +43,44 @@
         </label>
       </div>
 
+      <label class="label">合成发音人</label>
+      <select id="ttsVoice" class="voice-select">
+        <option value="5118" selected>度小鹿（精品女声，推荐）</option>
+        <option value="4194">度嫣然（大模型女声）</option>
+        <option value="4193">度泽言（大模型男声）</option>
+        <option value="5003">度逍遥（精品男声）</option>
+        <option value="4119">度小鹿（臻品女声）</option>
+        <option value="4105">度灵儿（臻品，适合英语）</option>
+        <option value="4149">度星河（臻品男声）</option>
+        <option value="4">度丫丫（基础情感女声）</option>
+        <option value="0">度小美（基础女声）</option>
+      </select>
+
       <button id="btnProcess" type="button" class="primary">开始处理</button>
     </section>
 
     <section class="card">
-      <h2>识别原文</h2>
-      <pre id="originalText" class="result">—</pre>
+      <h2>识别原文 <span class="tag">可手动修正</span></h2>
+      <textarea id="originalText" class="textarea" rows="5" placeholder="识别结果将显示在此，不准确可自行修改">—</textarea>
+      <button id="btnRetranslate" type="button" class="secondary" disabled>用修正原文重新翻译并合成</button>
+      <p id="asrMeta" class="hint"></p>
     </section>
 
     <section class="card">
       <h2>译文</h2>
       <pre id="translatedText" class="result">—</pre>
+    </section>
+
+    <section class="card">
+      <h2>合成语音试听</h2>
+      <p id="ttsHint" class="hint">处理完成后可在线播放（可在上方切换发音人重新合成）</p>
+      <p id="ttsMeta" class="hint"></p>
+      <audio id="ttsPlayer" class="tts-player" controls preload="metadata"></audio>
+      <div class="player-actions">
+        <button id="btnPlayTts" type="button" class="secondary" disabled>播放</button>
+        <button id="btnPauseTts" type="button" class="secondary" disabled>暂停</button>
+        <a id="ttsDownload" class="btn-link" href="#" download hidden>下载 MP3</a>
+      </div>
     </section>
 
     <section class="card">

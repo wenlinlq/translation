@@ -2,7 +2,7 @@
 	<view class="page">
 		<view class="header">
 			<text class="title">音频翻译</text>
-			<text class="subtitle">ASR → MT → TTS（Node 后端）</text>
+			<text class="subtitle">高精度 ASR · MT · TTS 试听</text>
 		</view>
 
 		<view class="card">
@@ -19,18 +19,45 @@
 			</picker>
 		</view>
 
+		<view class="card">
+			<text class="label">合成发音人</text>
+			<picker :range="voiceLabels" :value="voiceIndex" @change="onVoiceChange">
+				<view class="picker">{{ voiceLabels[voiceIndex] }}</view>
+			</picker>
+		</view>
+
 		<button type="primary" :loading="loading" :disabled="!audioPath && !audioFile" @click="process">
 			开始处理
 		</button>
 
 		<view class="card">
-			<text class="label">识别原文</text>
-			<text class="result">{{ originalText }}</text>
+			<text class="label">识别原文（可修正）</text>
+			<textarea
+				class="textarea"
+				v-model="originalText"
+				:disabled="loading"
+				placeholder="识别结果，不准确可手动修改"
+				auto-height
+			/>
+			<text v-if="asrMetaText" class="hint">{{ asrMetaText }}</text>
+			<button type="default" size="mini" :disabled="loading || !canRetranslate" @click="retranslate">
+				用修正原文重新翻译并合成
+			</button>
 		</view>
+
 		<view class="card">
 			<text class="label">译文</text>
 			<text class="result">{{ translatedText }}</text>
 		</view>
+
+		<view class="card" v-if="ttsAudioUrl">
+			<text class="label">合成语音试听</text>
+			<text v-if="ttsMetaText" class="hint">{{ ttsMetaText }}</text>
+			<text class="hint">点击下方按钮播放合成 MP3</text>
+			<button type="primary" size="mini" @click="playTts">播放</button>
+			<button type="default" size="mini" @click="pauseTts">暂停</button>
+		</view>
+
 		<view class="card">
 			<text class="label">运行日志</text>
 			<text class="log">{{ runLog }}</text>
@@ -42,6 +69,17 @@
 	const API_BASE = 'http://localhost:3000'
 	const LANG_CODES = ['zh', 'en', 'jp', 'kor']
 	const LANG_LABELS = ['中文', '英语', '日语', '韩语']
+	const VOICE_IDS = [5118, 4194, 4193, 5003, 4105, 4149, 4, 0]
+	const VOICE_LABELS = [
+		'度小鹿（精品女声）',
+		'度嫣然（大模型女声）',
+		'度泽言（大模型男声）',
+		'度逍遥（精品男声）',
+		'度灵儿（臻品·英语）',
+		'度星河（臻品男声）',
+		'度丫丫（基础女声）',
+		'度小美（基础女声）'
+	]
 
 	export default {
 		data() {
@@ -53,10 +91,26 @@
 				langLabels: LANG_LABELS,
 				sourceIndex: 0,
 				targetIndex: 1,
+				voiceLabels: VOICE_LABELS,
+				voiceIndex: 0,
 				loading: false,
-				originalText: '—',
+				originalText: '',
 				translatedText: '—',
-				runLog: ''
+				asrMetaText: '',
+				ttsAudioUrl: '',
+				ttsMetaText: '',
+				runLog: '',
+				innerAudio: null
+			}
+		},
+		computed: {
+			canRetranslate() {
+				return this.originalText && this.originalText.trim() && this.originalText !== '处理中…'
+			}
+		},
+		onUnload() {
+			if (this.innerAudio) {
+				this.innerAudio.destroy()
 			}
 		},
 		methods: {
@@ -69,6 +123,15 @@
 			},
 			onTargetChange(e) {
 				this.targetIndex = Number(e.detail.value)
+				if (LANG_CODES[this.targetIndex] === 'en' && this.voiceIndex === 0) {
+					this.voiceIndex = 4
+				}
+			},
+			onVoiceChange(e) {
+				this.voiceIndex = Number(e.detail.value)
+			},
+			getTtsPer() {
+				return String(VOICE_IDS[this.voiceIndex])
 			},
 			setSelectedFile(file, path, name) {
 				if (this.audioPath && this.audioPath.startsWith('blob:')) {
@@ -133,31 +196,87 @@
 				}
 				input.click()
 			},
+			applyResult(data) {
+				this.originalText = data.originalText || ''
+				this.translatedText = data.translatedText || '—'
+				if (data.asrMeta) {
+					this.asrMetaText = `模型 dev_pid=${data.asrMeta.devPid}，约 ${data.asrMeta.durationSec}s，${data.asrMeta.segments} 段`
+				}
+				if (data.ttsMeta?.per !== undefined) {
+					this.ttsMetaText = `发音人 per=${data.ttsMeta.per}`
+					const idx = VOICE_IDS.indexOf(data.ttsMeta.per)
+					if (idx >= 0) this.voiceIndex = idx
+				}
+				if (data.files?.ttsAudio) {
+					this.ttsAudioUrl = `${this.apiBase}${data.files.ttsAudio}`
+					this.setupInnerAudio(this.ttsAudioUrl)
+				}
+				this.log('完成，可试听合成语音')
+			},
+			setupInnerAudio(url) {
+				if (!this.innerAudio) {
+					this.innerAudio = uni.createInnerAudioContext()
+				}
+				this.innerAudio.src = url
+			},
+			playTts() {
+				if (!this.innerAudio && this.ttsAudioUrl) {
+					this.setupInnerAudio(this.ttsAudioUrl)
+				}
+				this.innerAudio?.play()
+			},
+			pauseTts() {
+				this.innerAudio?.pause()
+			},
 			handleProcessResult(data) {
 				if (data.success) {
-					this.originalText = data.originalText
-					this.translatedText = data.translatedText
-					this.log('完成，文件已保存到 backend/output')
-					uni.showModal({
-						title: '输出文件',
-						content: `文本: ${data.files?.resultTxt}\n音频: ${data.files?.ttsAudio}`,
-						showCancel: false
-					})
+					this.applyResult(data)
 				} else {
 					this.log(data.message || '失败')
 					uni.showToast({ title: data.message || '失败', icon: 'none' })
 				}
+			},
+			retranslate() {
+				const text = this.originalText.trim()
+				if (!text) return
+				this.loading = true
+				this.log('重新翻译…')
+				fetch(`${this.apiBase}/api/reprocess`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						originalText: text,
+						sourceLang: LANG_CODES[this.sourceIndex],
+						targetLang: LANG_CODES[this.targetIndex],
+						ttsPer: this.getTtsPer()
+					})
+				})
+					.then(async (res) => {
+						const data = await res.json()
+						if (!res.ok) throw new Error(data.message || '失败')
+						return data
+					})
+					.then((data) => this.handleProcessResult(data))
+					.catch((err) => {
+						this.log(err.message)
+						uni.showToast({ title: err.message, icon: 'none' })
+					})
+					.finally(() => {
+						this.loading = false
+					})
 			},
 			process() {
 				if (!this.audioPath && !this.audioFile) return
 				this.loading = true
 				this.originalText = '处理中…'
 				this.translatedText = '处理中…'
+				this.ttsAudioUrl = ''
 				this.log('上传处理中…')
 
 				const form = {
 					sourceLang: LANG_CODES[this.sourceIndex],
-					targetLang: LANG_CODES[this.targetIndex]
+					targetLang: LANG_CODES[this.targetIndex],
+					ttsPer: this.getTtsPer()
 				}
 
 				if (this.audioFile) {
@@ -165,6 +284,7 @@
 					body.append('audio', this.audioFile, this.audioName)
 					body.append('sourceLang', form.sourceLang)
 					body.append('targetLang', form.targetLang)
+					body.append('ttsPer', this.getTtsPer())
 					fetch(`${this.apiBase}/api/process`, { method: 'POST', body })
 						.then(async (res) => {
 							const data = await res.json()
@@ -254,6 +374,16 @@
 		font-weight: 600;
 		display: block;
 		margin-bottom: 12rpx;
+	}
+	.textarea {
+		width: 100%;
+		min-height: 160rpx;
+		padding: 16rpx;
+		font-size: 28rpx;
+		line-height: 1.6;
+		border: 1rpx solid #e2e8f0;
+		border-radius: 12rpx;
+		box-sizing: border-box;
 	}
 	.result, .log {
 		font-size: 28rpx;

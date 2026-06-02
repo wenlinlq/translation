@@ -5,7 +5,7 @@ import express from 'express';
 import multer from 'multer';
 import { recognizeSpeech } from '../services/asr.js';
 import { translateText } from '../services/mt.js';
-import { synthesizeSpeech } from '../services/tts.js';
+import { synthesizeSpeech, TTS_VOICE_OPTIONS } from '../services/tts.js';
 import { toWav16kMono } from '../utils/audioConvert.js';
 import * as logger from '../utils/logger.js';
 
@@ -40,6 +40,72 @@ const upload = multer({
 
 export const pipelineRouter = express.Router();
 
+async function runMtAndTts(
+  originalText,
+  sourceLang,
+  targetLang,
+  stamp,
+  speechKey,
+  speechSecret,
+  mtAppId,
+  mtSecret,
+  ttsPer
+) {
+  logger.log('INFO', '步骤 2/3：机器翻译 (MT)');
+  const translatedText = await translateText(
+    originalText,
+    sourceLang,
+    targetLang,
+    mtAppId,
+    mtSecret
+  );
+  logger.log('INFO', '翻译完成', translatedText);
+
+  const baseName = `result-${stamp}`;
+  const resultTxtPath = path.join(OUTPUT_DIR, `${baseName}.txt`);
+  const resultContent = [
+    '========== 原文（ASR） ==========',
+    originalText,
+    '',
+    '========== 译文（MT） ==========',
+    translatedText,
+    '',
+    `源语言: ${sourceLang}`,
+    `目标语言: ${targetLang}`,
+    `生成时间: ${new Date().toLocaleString('zh-CN')}`,
+  ].join('\n');
+  fs.writeFileSync(resultTxtPath, resultContent, 'utf8');
+  logger.log('INFO', '已保存文本结果', resultTxtPath);
+
+  logger.log('INFO', '步骤 3/3：语音合成 (TTS)');
+  const ttsPath = path.join(OUTPUT_DIR, `${baseName}-tts.mp3`);
+  const ttsResult = await synthesizeSpeech(
+    translatedText,
+    targetLang,
+    ttsPath,
+    speechKey,
+    speechSecret,
+    ttsPer
+  );
+  logger.log('INFO', '已保存合成音频', { path: ttsPath, per: ttsResult.per });
+
+  return {
+    originalText,
+    translatedText,
+    sourceLang,
+    targetLang,
+    ttsMeta: { per: ttsResult.per, lan: ttsResult.lan },
+    files: {
+      resultTxt: `/output/${path.basename(resultTxtPath)}`,
+      ttsAudio: `/output/${path.basename(ttsPath)}`,
+    },
+  };
+}
+
+pipelineRouter.get('/voices', (_req, res) => {
+  res.json({ voices: TTS_VOICE_OPTIONS });
+});
+
 pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
   const logPath = logger.startSessionLog();
   let tempWav = null;
@@ -60,8 +126,8 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
 
     const sourceLang = req.body.sourceLang || process.env.SOURCE_LANG || 'zh';
     const targetLang = req.body.targetLang || process.env.TARGET_LANG || 'en';
+    const ttsPer = req.body.ttsPer;
     const stamp = Date.now();
-    const baseName = `result-${stamp}`;
 
     logger.log('INFO', '收到音频', {
       originalname: req.file.originalname,
@@ -69,53 +135,29 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
       size: req.file.size,
     });
 
-    logger.log('INFO', '步骤 1/3：语音识别 (ASR)');
+    logger.log('INFO', '步骤 1/3：语音识别 (ASR 高精度)');
     tempWav = await toWav16kMono(req.file.path);
-    const originalText = await recognizeSpeech(tempWav, speechKey, speechSecret);
-    logger.log('INFO', '识别完成', originalText);
+    const asr = await recognizeSpeech(tempWav, speechKey, speechSecret, sourceLang);
+    logger.log('INFO', '识别完成', { text: asr.text, meta: asr.meta });
 
-    logger.log('INFO', '步骤 2/3：机器翻译 (MT)');
-    const translatedText = await translateText(
-      originalText,
+    const payload = await runMtAndTts(
+      asr.text,
       sourceLang,
       targetLang,
+      stamp,
+      speechKey,
+      speechSecret,
       mtAppId,
-      mtSecret
+      mtSecret,
+      ttsPer
     );
-    logger.log('INFO', '翻译完成', translatedText);
-
-    const resultTxtPath = path.join(OUTPUT_DIR, `${baseName}.txt`);
-    const resultContent = [
-      '========== 原文（ASR） ==========',
-      originalText,
-      '',
-      '========== 译文（MT） ==========',
-      translatedText,
-      '',
-      `源语言: ${sourceLang}`,
-      `目标语言: ${targetLang}`,
-      `生成时间: ${new Date().toLocaleString('zh-CN')}`,
-    ].join('\n');
-    fs.writeFileSync(resultTxtPath, resultContent, 'utf8');
-    logger.log('INFO', '已保存文本结果', resultTxtPath);
-
-    logger.log('INFO', '步骤 3/3：语音合成 (TTS)');
-    const ttsPath = path.join(OUTPUT_DIR, `${baseName}-tts.mp3`);
-    await synthesizeSpeech(translatedText, targetLang, ttsPath, speechKey, speechSecret);
-    logger.log('INFO', '已保存合成音频', ttsPath);
 
     logger.log('INFO', '流水线完成');
 
     res.json({
       success: true,
-      originalText,
-      translatedText,
-      sourceLang,
-      targetLang,
-      files: {
-        resultTxt: `/output/${path.basename(resultTxtPath)}`,
-        ttsAudio: `/output/${path.basename(ttsPath)}`,
-      },
+      ...payload,
+      asrMeta: asr.meta,
       logFile: path.basename(logPath),
     });
   } catch (err) {
@@ -136,5 +178,53 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
         /* ignore */
       }
     }
+  }
+});
+
+/** 用户修正原文后，仅重新翻译 + TTS */
+pipelineRouter.post('/reprocess', async (req, res) => {
+  const logPath = logger.startSessionLog();
+
+  try {
+    const { originalText, sourceLang, targetLang, ttsPer } = req.body || {};
+    if (!originalText?.trim()) {
+      return res.status(400).json({ success: false, message: '请提供修正后的原文' });
+    }
+
+    const speechKey = process.env.BAIDU_SPEECH_API_KEY;
+    const speechSecret = process.env.BAIDU_SPEECH_SECRET_KEY;
+    const mtAppId = process.env.BAIDU_MT_APP_ID;
+    const mtSecret = process.env.BAIDU_MT_SECRET;
+
+    if (!speechKey || !speechSecret || !mtAppId || !mtSecret) {
+      throw new Error('请在 backend/.env 中配置百度语音与翻译密钥');
+    }
+
+    const src = sourceLang || process.env.SOURCE_LANG || 'zh';
+    const tgt = targetLang || process.env.TARGET_LANG || 'en';
+    const stamp = Date.now();
+
+    logger.log('INFO', '用户修正原文后重新翻译', originalText.trim());
+
+    const payload = await runMtAndTts(
+      originalText.trim(),
+      src,
+      tgt,
+      stamp,
+      speechKey,
+      speechSecret,
+      mtAppId,
+      mtSecret,
+      ttsPer
+    );
+
+    res.json({
+      success: true,
+      ...payload,
+      logFile: path.basename(logPath),
+    });
+  } catch (err) {
+    logger.log('ERROR', err.message);
+    res.status(500).json({ success: false, message: err.message });
   }
 });

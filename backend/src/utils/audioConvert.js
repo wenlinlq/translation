@@ -20,7 +20,7 @@ if (!fs.existsSync(TEMP_DIR)) {
 
 let cachedFfmpegPath;
 
-async function resolveFfmpegPath() {
+export async function resolveFfmpegPath() {
   if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
 
   try {
