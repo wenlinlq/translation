@@ -3,6 +3,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+import getType from 'audio-type';
 import decode from 'audio-decode';
 
 const execFileAsync = promisify(execFile);
@@ -10,16 +11,47 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMP_DIR = path.join(__dirname, '../../uploads/temp');
 const TARGET_RATE = 16000;
 
+const ALLOWED_EXT = ['.wav', '.mp3', '.m4a', '.aac', '.mp4'];
+const FFMPEG_FIRST_TYPES = new Set(['m4a', 'aac', 'mp4', 'webm', 'amr', 'wma']);
+
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
-async function ffmpegAvailable() {
+let cachedFfmpegPath;
+
+async function resolveFfmpegPath() {
+  if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
+
+  try {
+    const mod = await import('@ffmpeg-installer/ffmpeg');
+    const bin = mod.default?.path || mod.path;
+    if (bin && fs.existsSync(bin)) {
+      cachedFfmpegPath = bin;
+      return bin;
+    }
+  } catch {
+    /* 未安装 @ffmpeg-installer/ffmpeg */
+  }
+
+  const winPaths = [
+    'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+  ];
+  for (const p of winPaths) {
+    if (fs.existsSync(p)) {
+      cachedFfmpegPath = p;
+      return p;
+    }
+  }
+
   try {
     await execFileAsync('ffmpeg', ['-version'], { timeout: 5000 });
-    return true;
+    cachedFfmpegPath = 'ffmpeg';
+    return 'ffmpeg';
   } catch {
-    return false;
+    cachedFfmpegPath = null;
+    return null;
   }
 }
 
@@ -79,27 +111,62 @@ function writeWav(filePath, samples, sampleRate) {
   fs.writeFileSync(filePath, buffer);
 }
 
-async function convertWithFfmpeg(inputPath, ext) {
+function pcmToAudioLike({ channelData, sampleRate }) {
+  const length = channelData[0]?.length ?? 0;
+  return {
+    sampleRate,
+    numberOfChannels: channelData.length,
+    length,
+    getChannelData: (i) => channelData[i],
+  };
+}
+
+function formatHint(detected, ext) {
+  if (detected && detected !== ext.replace('.', '')) {
+    return `（扩展名 ${ext}，实际格式 ${detected}）`;
+  }
+  return '';
+}
+
+async function decodeAudioBuffer(buffer, detected) {
+  const uint8 = new Uint8Array(buffer);
+
+  if (!detected) {
+    throw new Error('无法识别音频格式');
+  }
+
+  if (FFMPEG_FIRST_TYPES.has(detected)) {
+    throw new Error(
+      `当前格式 ${detected} 需 ffmpeg 转换，请在 backend 目录执行: npm install，或安装系统 ffmpeg`
+    );
+  }
+
+  try {
+    return await decode(uint8);
+  } catch (err) {
+    throw new Error(`音频解码失败: ${err.message}`);
+  }
+}
+
+async function convertWithFfmpeg(inputPath, ext, ffmpegBin) {
   const outPath = path.join(
     TEMP_DIR,
     `${path.basename(inputPath, ext)}-${Date.now()}.wav`
   );
   await execFileAsync(
-    'ffmpeg',
+    ffmpegBin,
     ['-y', '-i', inputPath, '-ar', String(TARGET_RATE), '-ac', '1', '-f', 'wav', outPath],
-    { timeout: 120_000 }
+    { timeout: 300_000, maxBuffer: 10 * 1024 * 1024 }
   );
+  if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 44) {
+    throw new Error('ffmpeg 未生成有效 WAV 文件');
+  }
   return outPath;
 }
 
-async function convertWithDecoder(inputPath, ext) {
+async function convertWithDecoder(inputPath, ext, detected) {
   const buffer = fs.readFileSync(inputPath);
-  let audio;
-  try {
-    audio = await decode(buffer);
-  } catch (err) {
-    throw new Error(`音频解码失败: ${err.message}`);
-  }
+  const audio = await decodeAudioBuffer(buffer, detected);
 
   let mono = mixToMono(audio);
   mono = resample(mono, audio.sampleRate, TARGET_RATE);
@@ -117,17 +184,38 @@ async function convertWithDecoder(inputPath, ext) {
  */
 export async function toWav16kMono(inputPath) {
   const ext = path.extname(inputPath).toLowerCase();
-  if (!['.wav', '.mp3'].includes(ext)) {
-    throw new Error('仅支持 WAV 或 MP3');
+  if (!ALLOWED_EXT.includes(ext)) {
+    throw new Error('仅支持 WAV、MP3、M4A、AAC 格式');
   }
 
-  if (await ffmpegAvailable()) {
+  const buffer = fs.readFileSync(inputPath);
+  const detected = getType(new Uint8Array(buffer));
+  const hint = formatHint(detected, ext);
+  const ffmpegBin = await resolveFfmpegPath();
+  const useFfmpegFirst =
+    ffmpegBin && (FFMPEG_FIRST_TYPES.has(detected) || detected === 'mp3' || ext !== '.wav');
+
+  if (useFfmpegFirst) {
     try {
-      return await convertWithFfmpeg(inputPath, ext);
-    } catch {
-      /* 回退到 JS 解码 */
+      return await convertWithFfmpeg(inputPath, ext, ffmpegBin);
+    } catch (err) {
+      if (FFMPEG_FIRST_TYPES.has(detected)) {
+        throw new Error(`M4A/AAC 转换失败${hint}: ${err.message}`);
+      }
+      /* mp3 等可回退 JS 解码 */
     }
   }
 
-  return convertWithDecoder(inputPath, ext);
+  try {
+    return await convertWithDecoder(inputPath, ext, detected);
+  } catch (err) {
+    if (ffmpegBin && !useFfmpegFirst) {
+      try {
+        return await convertWithFfmpeg(inputPath, ext, ffmpegBin);
+      } catch (ffErr) {
+        throw new Error(`${err.message}${hint}；ffmpeg 回退也失败: ${ffErr.message}`);
+      }
+    }
+    throw new Error(`${err.message}${hint}`);
+  }
 }

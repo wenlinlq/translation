@@ -20,13 +20,13 @@ audioFile.addEventListener('change', () => {
 btnProcess.addEventListener('click', async () => {
   const file = audioFile.files[0];
   if (!file) {
-    alert('请先选择 WAV 或 MP3 音频文件');
+    alert('请先选择 WAV、MP3 或 M4A 音频文件');
     return;
   }
 
   const ext = file.name.split('.').pop()?.toLowerCase();
-  if (!['wav', 'mp3'].includes(ext)) {
-    alert('仅支持 .wav 和 .mp3');
+  if (!['wav', 'mp3', 'm4a', 'aac', 'mp4'].includes(ext)) {
+    alert('仅支持 .wav、.mp3、.m4a');
     return;
   }
 

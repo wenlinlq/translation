@@ -30,10 +30,10 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (['.wav', '.mp3'].includes(ext)) {
+    if (['.wav', '.mp3', '.m4a', '.aac', '.mp4'].includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('仅支持 WAV 或 MP3 文件'));
+      cb(new Error('仅支持 WAV、MP3、M4A 格式'));
     }
   },
 });

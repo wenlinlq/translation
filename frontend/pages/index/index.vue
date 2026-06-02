@@ -6,7 +6,7 @@
 		</view>
 
 		<view class="card">
-			<button type="primary" @click="chooseAudio">选择本地音频 (WAV/MP3)</button>
+			<button type="primary" @click="chooseAudio">选择本地音频 (WAV/MP3/M4A)</button>
 			<text class="hint">{{ audioName || '未选择文件' }}</text>
 		</view>
 
@@ -84,7 +84,7 @@
 					uni.chooseMessageFile({
 						count: 1,
 						type: 'file',
-						extension: ['.wav', '.mp3'],
+						extension: ['.wav', '.mp3', '.m4a'],
 						success: (res) => {
 							const f = res.tempFiles[0]
 							this.setSelectedFile(null, f.path, f.name)
@@ -99,7 +99,7 @@
 				if (typeof uni.chooseFile === 'function') {
 					uni.chooseFile({
 						count: 1,
-						extension: ['.wav', '.mp3'],
+						extension: ['.wav', '.mp3', '.m4a'],
 						success: (res) => {
 							const f = res.tempFiles[0]
 							this.setSelectedFile(null, f.path, f.name)
@@ -120,13 +120,13 @@
 				}
 				const input = document.createElement('input')
 				input.type = 'file'
-				input.accept = '.wav,.mp3,audio/wav,audio/mpeg'
+				input.accept = '.wav,.mp3,.m4a,.aac,audio/*'
 				input.onchange = (e) => {
 					const file = e.target.files && e.target.files[0]
 					if (!file) return
 					const ext = file.name.split('.').pop()?.toLowerCase()
-					if (!['wav', 'mp3'].includes(ext)) {
-						uni.showToast({ title: '仅支持 WAV / MP3', icon: 'none' })
+					if (!['wav', 'mp3', 'm4a', 'aac', 'mp4'].includes(ext)) {
+						uni.showToast({ title: '仅支持 WAV / MP3 / M4A', icon: 'none' })
 						return
 					}
 					this.setSelectedFile(file, URL.createObjectURL(file), file.name)
