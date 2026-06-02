@@ -9,8 +9,10 @@ const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHUNK_DIR = path.join(__dirname, '../../uploads/chunks');
 
-/** 百度短语音建议 ≤25 秒/段，避免 content len too long */
-export const ASR_CHUNK_SECONDS = 25;
+import { AUDIO_LIMITS } from '../config/audioLimits.js';
+
+/** 每段须低于百度单次 60 秒上限 */
+export const ASR_CHUNK_SECONDS = AUDIO_LIMITS.chunkSeconds;
 
 const MAX_WAV_BYTES = 900 * 1024;
 

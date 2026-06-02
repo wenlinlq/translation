@@ -6,7 +6,11 @@
 		</view>
 
 		<view class="card">
-			<button type="primary" @click="chooseAudio">选择本地音频 (WAV/MP3/M4A)</button>
+			<text class="label">选择本地音频</text>
+			<text class="hint req">· 百度短语音：单次录音 ≤60 秒（官方限制）</text>
+			<text class="hint req">· 请上传 ≤60 秒人声；更长会切分仍可能失败，请先裁剪</text>
+			<text class="hint req">· 格式 WAV/MP3/M4A，16kHz 单声道，≤50MB</text>
+			<button type="primary" @click="chooseAudio">选择文件</button>
 			<text class="hint">{{ audioName || '未选择文件' }}</text>
 		</view>
 
@@ -207,6 +211,16 @@
 					const idx = VOICE_IDS.indexOf(data.ttsMeta.per)
 					if (idx >= 0) this.voiceIndex = idx
 				}
+				if (data.timings) {
+					const t = data.timings
+					const parts = []
+					if (t.convert != null) parts.push(`转换${t.convert}ms`)
+					if (t.asr != null) parts.push(`ASR${t.asr}ms`)
+					if (t.mt != null) parts.push(`MT${t.mt}ms`)
+					if (t.tts != null) parts.push(`TTS${t.tts}ms`)
+					if (t.total != null) parts.push(`总计${t.total}ms`)
+					this.log(`耗时 ${parts.join(' ')}`)
+				}
 				if (data.files?.ttsAudio) {
 					this.ttsAudioUrl = `${this.apiBase}${data.files.ttsAudio}`
 					this.setupInnerAudio(this.ttsAudioUrl)
@@ -369,6 +383,11 @@
 		margin-top: 16rpx;
 		font-size: 26rpx;
 		color: #64748b;
+	}
+	.hint.req {
+		margin-top: 8rpx;
+		font-size: 24rpx;
+		line-height: 1.5;
 	}
 	.label {
 		font-weight: 600;

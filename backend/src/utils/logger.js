@@ -31,3 +31,10 @@ export function log(level, message, data) {
 export function getSessionLogPath() {
   return sessionLogPath;
 }
+
+/** 打印各阶段耗时 */
+export function logTiming(stage, ms, extra) {
+  const sec = (ms / 1000).toFixed(2);
+  const detail = extra !== undefined ? ` ${typeof extra === 'string' ? extra : JSON.stringify(extra)}` : '';
+  log('INFO', `[耗时] ${stage}: ${ms} ms (${sec} s)${detail}`);
+}

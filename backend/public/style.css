@@ -103,6 +103,18 @@ header h1 {
   font-size: 0.85rem;
 }
 
+.requirements {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: #475569;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.requirements li {
+  margin-bottom: 4px;
+}
+
 .result,
 .log {
   margin: 0;

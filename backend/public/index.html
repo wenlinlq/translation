@@ -10,11 +10,17 @@
   <main class="container">
     <header>
       <h1>音频识别 · 翻译 · 语音合成</h1>
-      <p class="subtitle">ASR 自动分段 · 模型无权限时自动回退</p>
+      <p class="subtitle">百度短语音 · 单次 ≤60 秒</p>
     </header>
 
     <section class="card">
       <label class="label">本地音频（WAV / MP3 / M4A）</label>
+      <ul class="requirements">
+        <li><strong>时长（百度短语音识别）</strong>：单次请求录音不超过 <strong>60 秒</strong>（官方限制）</li>
+        <li>请上传 ≤ 60 秒的清晰人声；更长将自动切分（每段约 59 秒），2～3 分钟以上仍可能失败，请先裁剪</li>
+        <li>格式：WAV / MP3 / M4A，16kHz 单声道，单文件 ≤ 50MB</li>
+        <li>超过 5 分钟的长音频需用百度「音频文件转写」，本工具暂未接入</li>
+      </ul>
       <div class="file-row">
         <input type="file" id="audioFile" accept=".wav,.mp3,.m4a,.aac,audio/*" />
         <span id="fileName" class="hint">未选择文件</span>

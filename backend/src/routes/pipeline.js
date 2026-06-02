@@ -7,7 +7,10 @@ import { recognizeSpeech } from '../services/asr.js';
 import { translateText } from '../services/mt.js';
 import { synthesizeSpeech, TTS_VOICE_OPTIONS } from '../services/tts.js';
 import { toWav16kMono } from '../utils/audioConvert.js';
+import { getWavDurationSeconds } from '../utils/wavSplit.js';
+import { createTimer } from '../utils/timing.js';
 import * as logger from '../utils/logger.js';
+import { AUDIO_LIMITS, UPLOAD_HINT_LINES } from '../config/audioLimits.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = path.join(__dirname, '../../uploads');
@@ -27,7 +30,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: AUDIO_LIMITS.maxFileSizeMb * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (['.wav', '.mp3', '.m4a', '.aac', '.mp4'].includes(ext)) {
@@ -49,8 +52,10 @@ async function runMtAndTts(
   speechSecret,
   mtAppId,
   mtSecret,
-  ttsPer
+  ttsPer,
+  timings
 ) {
+  let t = createTimer();
   logger.log('INFO', '步骤 2/3：机器翻译 (MT)');
   const translatedText = await translateText(
     originalText,
@@ -59,7 +64,8 @@ async function runMtAndTts(
     mtAppId,
     mtSecret
   );
-  logger.log('INFO', '翻译完成', translatedText);
+  timings.mt = t.elapsedMs();
+  logger.logTiming('MT 机器翻译', timings.mt);
 
   const baseName = `result-${stamp}`;
   const resultTxtPath = path.join(OUTPUT_DIR, `${baseName}.txt`);
@@ -73,10 +79,14 @@ async function runMtAndTts(
     `源语言: ${sourceLang}`,
     `目标语言: ${targetLang}`,
     `生成时间: ${new Date().toLocaleString('zh-CN')}`,
+    '',
+    '========== 各阶段耗时 ==========',
+    ...Object.entries(timings).map(([k, v]) => `${k}: ${v} ms`),
   ].join('\n');
   fs.writeFileSync(resultTxtPath, resultContent, 'utf8');
   logger.log('INFO', '已保存文本结果', resultTxtPath);
 
+  t = createTimer();
   logger.log('INFO', '步骤 3/3：语音合成 (TTS)');
   const ttsPath = path.join(OUTPUT_DIR, `${baseName}-tts.mp3`);
   const ttsResult = await synthesizeSpeech(
@@ -87,7 +97,9 @@ async function runMtAndTts(
     speechSecret,
     ttsPer
   );
-  logger.log('INFO', '已保存合成音频', { path: ttsPath, per: ttsResult.per });
+  timings.tts = t.elapsedMs();
+  logger.logTiming('TTS 语音合成', timings.tts, { per: ttsResult.per });
+  logger.log('INFO', '已保存合成音频', ttsPath);
 
   return {
     originalText,
@@ -102,12 +114,18 @@ async function runMtAndTts(
   };
 }
 
+pipelineRouter.get('/limits', (_req, res) => {
+  res.json({ limits: AUDIO_LIMITS, hints: UPLOAD_HINT_LINES });
+});
+
 pipelineRouter.get('/voices', (_req, res) => {
   res.json({ voices: TTS_VOICE_OPTIONS });
 });
 
 pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
   const logPath = logger.startSessionLog();
+  const pipelineTimer = createTimer();
+  const timings = {};
   let tempWav = null;
 
   try {
@@ -131,14 +149,31 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
 
     logger.log('INFO', '收到音频', {
       originalname: req.file.originalname,
-      path: req.file.path,
       size: req.file.size,
+      sizeMb: (req.file.size / 1024 / 1024).toFixed(2),
     });
 
-    logger.log('INFO', '步骤 1/3：语音识别 (ASR 高精度)');
+    let t = createTimer();
+    logger.log('INFO', '步骤 0：音频格式转换');
     tempWav = await toWav16kMono(req.file.path);
+    const audioDurationSec = getWavDurationSeconds(tempWav);
+    timings.convert = t.elapsedMs();
+    logger.logTiming('音频转换', timings.convert, {
+      durationSec: Math.round(audioDurationSec * 10) / 10,
+    });
+
+    if (audioDurationSec > AUDIO_LIMITS.baiduShortAsrMaxSeconds) {
+      logger.log(
+        'INFO',
+        `音频 ${audioDurationSec}s 超过百度短语音单次 ${AUDIO_LIMITS.baiduShortAsrMaxSeconds}s 限制，将按 ${AUDIO_LIMITS.chunkSeconds}s/段切分`
+      );
+    }
+
+    t = createTimer();
+    logger.log('INFO', '步骤 1/3：语音识别 (ASR)');
     const asr = await recognizeSpeech(tempWav, speechKey, speechSecret, sourceLang);
-    logger.log('INFO', '识别完成', { text: asr.text, meta: asr.meta });
+    timings.asr = t.elapsedMs();
+    logger.logTiming('ASR 语音识别', timings.asr, asr.meta);
 
     const payload = await runMtAndTts(
       asr.text,
@@ -149,20 +184,25 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
       speechSecret,
       mtAppId,
       mtSecret,
-      ttsPer
+      ttsPer,
+      timings
     );
 
-    logger.log('INFO', '流水线完成');
+    timings.total = pipelineTimer.elapsedMs();
+    logger.logTiming('流水线总计', timings.total, timings);
 
     res.json({
       success: true,
       ...payload,
-      asrMeta: asr.meta,
+      asrMeta: { ...asr.meta, audioDurationSec },
+      timings,
       logFile: path.basename(logPath),
     });
   } catch (err) {
+    timings.total = pipelineTimer.elapsedMs();
+    logger.logTiming('流水线失败前已耗时', timings.total);
     logger.log('ERROR', err.message);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message, timings });
   } finally {
     if (req.file?.path && fs.existsSync(req.file.path)) {
       try {
@@ -184,6 +224,8 @@ pipelineRouter.post('/process', upload.single('audio'), async (req, res) => {
 /** 用户修正原文后，仅重新翻译 + TTS */
 pipelineRouter.post('/reprocess', async (req, res) => {
   const logPath = logger.startSessionLog();
+  const pipelineTimer = createTimer();
+  const timings = {};
 
   try {
     const { originalText, sourceLang, targetLang, ttsPer } = req.body || {};
@@ -215,16 +257,23 @@ pipelineRouter.post('/reprocess', async (req, res) => {
       speechSecret,
       mtAppId,
       mtSecret,
-      ttsPer
+      ttsPer,
+      timings
     );
+
+    timings.total = pipelineTimer.elapsedMs();
+    logger.logTiming('重新翻译流水线总计', timings.total, timings);
 
     res.json({
       success: true,
       ...payload,
+      timings,
       logFile: path.basename(logPath),
     });
   } catch (err) {
+    timings.total = pipelineTimer.elapsedMs();
+    logger.logTiming('流水线失败前已耗时', timings.total);
     logger.log('ERROR', err.message);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message, timings });
   }
 });

@@ -41,7 +41,9 @@ function applyResult(data) {
   btnRetranslate.disabled = !data.originalText;
 
   if (data.asrMeta) {
-    asrMeta.textContent = `识别模型 dev_pid=${data.asrMeta.devPid}，时长约 ${data.asrMeta.durationSec}s，分段 ${data.asrMeta.segments} 段`;
+    const dur = data.asrMeta.audioDurationSec ?? data.asrMeta.durationSec;
+    const maxSec = data.asrMeta.baiduMaxSecPerRequest ?? 60;
+    asrMeta.textContent = `百度短语音（单次≤${maxSec}s）dev_pid=${data.asrMeta.devPid}，本文件约 ${dur}s，分 ${data.asrMeta.segments} 段识别`;
   }
 
   if (data.files?.ttsAudio) {
@@ -49,8 +51,22 @@ function applyResult(data) {
   }
 
   if (data.ttsMeta?.per !== undefined) {
-    ttsMeta.textContent = `当前使用发音人 per=${data.ttsMeta.per}`;
+    const ttsLine = `发音人 per=${data.ttsMeta.per}`;
+    ttsMeta.textContent = data.timings?.tts
+      ? `${ttsLine} · TTS 耗时 ${data.timings.tts} ms`
+      : ttsLine;
     if (ttsVoice) ttsVoice.value = String(data.ttsMeta.per);
+  }
+
+  if (data.timings) {
+    const t = data.timings;
+    const parts = [];
+    if (t.convert != null) parts.push(`转换 ${t.convert}ms`);
+    if (t.asr != null) parts.push(`ASR ${t.asr}ms`);
+    if (t.mt != null) parts.push(`MT ${t.mt}ms`);
+    if (t.tts != null) parts.push(`TTS ${t.tts}ms`);
+    if (t.total != null) parts.push(`总计 ${t.total}ms`);
+    appendLog(`[耗时] ${parts.join(' · ')}`);
   }
 
   outputLinks.innerHTML = `
